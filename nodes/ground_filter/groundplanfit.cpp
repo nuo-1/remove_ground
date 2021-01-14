@@ -1,16 +1,6 @@
-/*
-    @file groundplanfit.cpp
-    @brief ROS Node for ground plane fitting
-
-    This is a ROS node to perform ground plan fitting.
-    Implementation accoriding to <Fast Segmentation of 3D Point Clouds: A Paradigm>
-
-    In this case, it's assumed that the x,y axis points at sea-level,
-    and z-axis points up. The sort of height is based on the Z-axis value.
-
-    @author Vincent Cheung(VincentCheungm)
-    @bug Sometimes the plane is not fit.
-*/
+//
+// Created by nuo on 2021/1/14.
+//
 
 #include <iostream>
 // For disable PCL complile lib, to use PointXYZIR    
@@ -27,18 +17,21 @@
 
 #include <velodyne_pointcloud/point_types.h>
 
+#include <pcl/io/pcd_io.h>
+#include <pcl/point_types.h>
+
 //Customed Point Struct for holding clustered points
 namespace scan_line_run
 {
-  /** Euclidean Velodyne coordinate, including intensity and ring number, and label. */
-  struct PointXYZIRL
-  {
-    PCL_ADD_POINT4D;                    // quad-word XYZ
-    float    intensity;                 ///< laser intensity reading
-    uint16_t ring;                      ///< laser ring number
-    uint16_t label;                     ///< point label
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW     // ensure proper alignment
-  } EIGEN_ALIGN16;
+    /** Euclidean Velodyne coordinate, including intensity and ring number, and label. */
+    struct PointXYZIRL
+    {
+        PCL_ADD_POINT4D;                    // quad-word XYZ
+        float    intensity;                 ///< laser intensity reading
+        uint16_t ring;                      ///< laser ring number
+        uint16_t label;                     ///< point label
+        EIGEN_MAKE_ALIGNED_OPERATOR_NEW     // ensure proper alignment
+    } EIGEN_ALIGN16;
 
 }; // namespace scan_line_run
 
@@ -48,11 +41,11 @@ namespace scan_line_run
 // Register custom point struct according to PCL
 POINT_CLOUD_REGISTER_POINT_STRUCT(scan_line_run::PointXYZIRL,
                                   (float, x, x)
-                                  (float, y, y)
-                                  (float, z, z)
-                                  (float, intensity, intensity)
-                                  (uint16_t, ring, ring)
-                                  (uint16_t, label, label))
+                                          (float, y, y)
+                                          (float, z, z)
+                                          (float, intensity, intensity)
+                                          (uint16_t, ring, ring)
+                                          (uint16_t, label, label))
 
 // using eigen lib
 #include <Eigen/Dense>
@@ -81,7 +74,7 @@ bool point_cmp(VPoint a, VPoint b){
     @param Sensor height for filtering error mirror points.
     @param Num of segment, iteration, LPR
     @param Threshold of seeds distance, and ground plane distance
-    
+
     @subscirbe:/velodyne_points
     @publish:/points_no_ground, /points_ground
 */
@@ -106,18 +99,20 @@ private:
     double th_dist_;
 
 
-    void velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg);
+    //void velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg);
     void estimate_plane_(void);
     void extract_initial_seeds_(const pcl::PointCloud<VPoint>& p_sorted);
+
+    void load_pcd(void);
 
     // Model parameter for ground plane fitting
     // The ground plane model is: ax+by+cz+d=0
     // Here normal:=[a,b,c], d=d
-    // th_dist_d_ = threshold_dist - d 
+    // th_dist_d_ = threshold_dist - d
     float d_;
     MatrixXf normal_;
     float th_dist_d_;
-};    
+};
 
 /*
     @brief Constructor of GPF Node.
@@ -126,8 +121,8 @@ private:
 GroundPlaneFit::GroundPlaneFit():node_handle_("~"){
     // Init ROS related
     ROS_INFO("Inititalizing Ground Plane Fitter...");
-    node_handle_.param<std::string>("point_topic", point_topic_, "/velodyne_points");
-    ROS_INFO("Input Point Cloud: %s", point_topic_.c_str());
+    /*node_handle_.param<std::string>("point_topic", point_topic_, "/velodyne_points");
+    ROS_INFO("Input Point Cloud: %s", point_topic_.c_str());*/
 
     node_handle_.param("sensor_model", sensor_model_, 32);
     ROS_INFO("Sensor Model: %d", sensor_model_);
@@ -151,17 +146,21 @@ GroundPlaneFit::GroundPlaneFit():node_handle_("~"){
     ROS_INFO("Distance Threshold: %f", th_dist_);
 
     // Listen to velodyne topic
-    points_node_sub_ = node_handle_.subscribe(point_topic_, 2, &GroundPlaneFit::velodyne_callback_, this);
-    
+    //points_node_sub_ = node_handle_.subscribe(point_topic_, 2, &GroundPlaneFit::velodyne_callback_, this);
+
+    //load pcd file
+    load_pcd();
+
+
     // Publish Init
-    std::string no_ground_topic, ground_topic;
+    /*std::string no_ground_topic, ground_topic;
     node_handle_.param<std::string>("no_ground_point_topic", no_ground_topic, "/points_no_ground");
     ROS_INFO("No Ground Output Point Cloud: %s", no_ground_topic.c_str());
     node_handle_.param<std::string>("ground_point_topic", ground_topic, "/points_ground");
     ROS_INFO("Only Ground Output Point Cloud: %s", ground_topic.c_str());
     groundless_points_pub_ = node_handle_.advertise<sensor_msgs::PointCloud2>(no_ground_topic, 2);
     ground_points_pub_ = node_handle_.advertise<sensor_msgs::PointCloud2>(ground_topic, 2);
-    all_points_pub_ =  node_handle_.advertise<sensor_msgs::PointCloud2>("/all_points", 2);
+    all_points_pub_ =  node_handle_.advertise<sensor_msgs::PointCloud2>("/all_points", 2);*/
 }
 
 /*
@@ -170,11 +169,11 @@ GroundPlaneFit::GroundPlaneFit():node_handle_("~"){
     is set here.
     The main step is performed SVD(UAV) on covariance matrix.
     Taking the sigular vector in U matrix according to the smallest
-    sigular value in A, as the `normal_`. `d_` is then calculated 
+    sigular value in A, as the `normal_`. `d_` is then calculated
     according to mean ground points.
 
     @param g_ground_pc:global ground pointcloud ptr.
-    
+
 */
 void GroundPlaneFit::estimate_plane_(void){
     // Create covarian matrix in single pass.
@@ -193,7 +192,7 @@ void GroundPlaneFit::estimate_plane_(void){
     d_ = -(normal_.transpose()*seeds_mean)(0,0);
     // set distance threhold to `th_dist - d`
     th_dist_d_ = th_dist_ - d_;
- 
+
     // return the equation parameters
 }
 
@@ -203,7 +202,7 @@ void GroundPlaneFit::estimate_plane_(void){
     This function filter ground seeds points accoring to heigt.
     This function will set the `g_ground_pc` to `g_seed_pc`.
     @param p_sorted: sorted pointcloud
-    
+
     @param ::num_lpr_: num of LPR points
     @param ::th_seeds_: threshold distance of seeds
     @param ::
@@ -214,7 +213,7 @@ void GroundPlaneFit::extract_initial_seeds_(const pcl::PointCloud<VPoint>& p_sor
     double sum = 0;
     int cnt = 0;
     // Calculate the mean height value.
-    for(int i=0;i<p_sorted.points.size() && cnt<num_lpr_;i++){
+    for(int i=0;i<p_sorted.points.size() && cnt<num_lpr_;i++){  //num_lpr_ ： 20
         sum += p_sorted.points[i].z;
         cnt++;
     }
@@ -222,7 +221,7 @@ void GroundPlaneFit::extract_initial_seeds_(const pcl::PointCloud<VPoint>& p_sor
     g_seeds_pc->clear();
     // iterate pointcloud, filter those height is less than lpr.height+th_seeds_
     for(int i=0;i<p_sorted.points.size();i++){
-        if(p_sorted.points[i].z < lpr_height + th_seeds_){
+        if(p_sorted.points[i].z < lpr_height + th_seeds_){   //th_seeds_：1.2
             g_seeds_pc->points.push_back(p_sorted.points[i]);
         }
     }
@@ -234,44 +233,51 @@ void GroundPlaneFit::extract_initial_seeds_(const pcl::PointCloud<VPoint>& p_sor
     PointCloud SensorMsg -> Pointcloud -> z-value sorted Pointcloud
     ->error points removal -> extract ground seeds -> ground plane fit mainloop
 */
-void GroundPlaneFit::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_cloud_msg){
+void GroundPlaneFit::load_pcd(void){
     // 1.Msg to pointcloud
-    pcl::PointCloud<VPoint> laserCloudIn;
+    /*pcl::PointCloud<VPoint> laserCloudIn;
     pcl::fromROSMsg(*in_cloud_msg, laserCloudIn);
     pcl::PointCloud<VPoint> laserCloudIn_org;
-    pcl::fromROSMsg(*in_cloud_msg, laserCloudIn_org);
+    pcl::fromROSMsg(*in_cloud_msg, laserCloudIn_org);*/
+
+    pcl::PointCloud<VPoint>::Ptr cloud_pcd (new pcl::PointCloud<VPoint>);
+    pcl::io::loadPCDFile<VPoint>("/home/nuo/test3_ws/src/Run_based_segmentation/data/finalCloud.pcd",*cloud_pcd);
+
+    pcl::PointCloud<VPoint>::Ptr cloud_pcd_org (new pcl::PointCloud<VPoint>);
+    pcl::io::loadPCDFile<VPoint>("/home/nuo/test3_ws/src/Run_based_segmentation/data/finalCloud.pcd",*cloud_pcd_org);
+
     // For mark ground points and hold all points
     SLRPointXYZIRL point;
-    for(size_t i=0;i<laserCloudIn.points.size();i++){
-        point.x = laserCloudIn.points[i].x;
-        point.y = laserCloudIn.points[i].y;
-        point.z = laserCloudIn.points[i].z;
-        point.intensity = laserCloudIn.points[i].intensity;
-        point.ring = laserCloudIn.points[i].ring;
+    for(size_t i=0;i<(*cloud_pcd).points.size();i++){
+        point.x = (*cloud_pcd).points[i].x;
+        point.y = (*cloud_pcd).points[i].y;
+        point.z = (*cloud_pcd).points[i].z;
+        point.intensity = (*cloud_pcd).points[i].intensity;
+        //point.ring = 0;
         point.label = 0u;// 0 means uncluster
         g_all_pc->points.push_back(point);
     }
     //std::vector<int> indices;
     //pcl::removeNaNFromPointCloud(laserCloudIn, laserCloudIn,indices);
     // 2.Sort on Z-axis value.
-    sort(laserCloudIn.points.begin(),laserCloudIn.end(),point_cmp);
+    sort((*cloud_pcd).points.begin(),(*cloud_pcd).end(),point_cmp);
     // 3.Error point removal
-    // As there are some error mirror reflection under the ground, 
+    // As there are some error mirror reflection under the ground,
     // here regardless point under 2* sensor_height
     // Sort point according to height, here uses z-axis in default
-    pcl::PointCloud<VPoint>::iterator it = laserCloudIn.points.begin();
-    for(int i=0;i<laserCloudIn.points.size();i++){
-        if(laserCloudIn.points[i].z < -1.5*sensor_height_){
+    pcl::PointCloud<VPoint>::iterator it = (*cloud_pcd).points.begin();
+    for(int i=0;i<(*cloud_pcd).points.size();i++){
+        if((*cloud_pcd).points[i].z < -1.5*sensor_height_){    //-1.5 * 2.5（sensor_height_）
             it++;
         }else{
             break;
         }
     }
-    laserCloudIn.points.erase(laserCloudIn.points.begin(),it);
+    (*cloud_pcd).points.erase((*cloud_pcd).points.begin(),it);  //delete point that Z-axis value under -1.5*sensor_height_(2.5)
     // 4. Extract init ground seeds.
-    extract_initial_seeds_(laserCloudIn);
+    extract_initial_seeds_(*cloud_pcd);
     g_ground_pc = g_seeds_pc;
-    
+
     // 5. Ground plane fitter mainloop
     for(int i=0;i<num_iter_;i++){
         estimate_plane_();
@@ -279,45 +285,66 @@ void GroundPlaneFit::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& 
         g_not_ground_pc->clear();
 
         //pointcloud to matrix
-        MatrixXf points(laserCloudIn_org.points.size(),3);
+        MatrixXf points((*cloud_pcd_org).points.size(),3);
         int j =0;
-        for(auto p:laserCloudIn_org.points){
+        for(auto p:(*cloud_pcd_org).points){
             points.row(j++)<<p.x,p.y,p.z;
         }
         // ground plane model
         VectorXf result = points*normal_;
         // threshold filter
         for(int r=0;r<result.rows();r++){
-            if(result[r]<th_dist_d_){
+            if(result[r]<th_dist_d_){    //th_dist_d_ = th_dist_ - d_;
                 g_all_pc->points[r].label = 1u;// means ground
-                g_ground_pc->points.push_back(laserCloudIn_org[r]);
+                g_ground_pc->points.push_back((*cloud_pcd_org)[r]);
             }else{
                 g_all_pc->points[r].label = 0u;// means not ground and non clusterred
-                g_not_ground_pc->points.push_back(laserCloudIn_org[r]);
+                g_not_ground_pc->points.push_back((*cloud_pcd_org)[r]);
             }
         }
     }
 
 
     // publish ground points
-    sensor_msgs::PointCloud2 ground_msg;
+    /*sensor_msgs::PointCloud2 ground_msg;
     pcl::toROSMsg(*g_ground_pc, ground_msg);
     ground_msg.header.stamp = in_cloud_msg->header.stamp;
     ground_msg.header.frame_id = in_cloud_msg->header.frame_id;
-    ground_points_pub_.publish(ground_msg);
+    ground_points_pub_.publish(ground_msg);*/
+
+     //pcl::io::savePCDFileASCII("g_ground_pc.pcd",*g_ground_pc);
+     /*pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_mid(new pcl::PointCloud<pcl::PointXYZI>());
+     cloud_mid->points.resize((*g_ground_pc).points.size() * 1);
+     for(int i = 0; i<(*g_ground_pc).points.size(); i++)
+     {
+         cloud_mid->points[i].x = g_ground_pc->points[i].x;
+         cloud_mid->points[i].y = g_ground_pc->points[i].y;
+         cloud_mid->points[i].z = g_ground_pc->points[i].z;
+         cloud_mid->points[i].intensity = g_ground_pc->points[i].intensity;
+     }
+     pcl::io::savePCDFileASCII("g_ground_pc.pcd",*cloud_mid);*/
+     std::cerr << "saved " <<(*g_ground_pc).points.size() <<" data points to g_ground_pc.pcd" << std::endl;
+
     // publish not ground points
-    sensor_msgs::PointCloud2 groundless_msg;
+    /*sensor_msgs::PointCloud2 groundless_msg;
     pcl::toROSMsg(*g_not_ground_pc, groundless_msg);
     groundless_msg.header.stamp = in_cloud_msg->header.stamp;
     groundless_msg.header.frame_id = in_cloud_msg->header.frame_id;
-    groundless_points_pub_.publish(groundless_msg);
+    groundless_points_pub_.publish(groundless_msg);*/
+
+    //pcl::io::savePCDFileASCII("g_not_ground_pc.pcd",*g_not_ground_pc);
+    std::cerr << "saved " <<(*g_not_ground_pc).points.size() <<" data points to g_not_ground_pc.pcd" << std::endl;
+
     // publish all points
-    sensor_msgs::PointCloud2 all_points_msg;
+    /*sensor_msgs::PointCloud2 all_points_msg;
     pcl::toROSMsg(*g_all_pc, all_points_msg);
     all_points_msg.header.stamp = in_cloud_msg->header.stamp;
     all_points_msg.header.frame_id = in_cloud_msg->header.frame_id;
     all_points_pub_.publish(all_points_msg);
-    g_all_pc->clear();
+    g_all_pc->clear();*/
+
+    //pcl::io::savePCDFileASCII("g_all_pc.pcd",*g_all_pc);
+    std::cerr << "saved " <<(*g_all_pc).points.size() <<" data points to g_all_pc.pcd" << std::endl;
 }
 
 int main(int argc, char **argv)

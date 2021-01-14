@@ -46,18 +46,5 @@ target_link_libraries(groundplanfit
 	${PCL_LIBRARIES}
 )
 
-#Scan Line Run
-add_executable(scanlinerun 
-	nodes/clustering/scanlinerun.cpp
-)
-
-target_include_directories(scanlinerun PRIVATE
-	${PCL_INCLUDE_DIRS}
-)
-
-target_link_libraries(scanlinerun
-	${catkin_LIBRARIES}
-	${PCL_LIBRARIES}
-)
 
 
